@@ -7,9 +7,11 @@ Looks for specific items on a given webpage, writes the data to a .csv file.
 Looks for webpages from a command line argument or standard input. 
 Input file should only have one url per line.
 
+Optional third commandline argument to create an output log.
+
 Usage:
 
-python web-scraper.py target-urls.txt records.csv
+python web-scraper.py target-urls.txt records.csv [output-log]
 
 @author: Jason L. Zhang
 @maintainer: Jason L. Zhang
@@ -18,6 +20,7 @@ python web-scraper.py target-urls.txt records.csv
 """
 
 import csv
+import random
 import time
 import httplib
 import json
@@ -31,23 +34,26 @@ def usage():
     Prints a message regarding usage this program's usage and exits.
     """
     print "Incorrect argument format. Script should be called as follows: \
-          \n 'python web-scraper.py [URL-TARGETS] [OUTPUT-DESTINATION]' \
-          \n Command line arguments are required."
+          \n 'python web-scraper.py URL-TARGETS OUTPUT-DESTINATION [LOG.csv]' \
+          \n Bracketed arguments are optional. Log file will duplicate most \
+          recent changes only, optimally named DATE.csv for personal records."
     sys.exit(0)
 
-if len(sys.argv) != 3:
+if len(sys.argv) != 3 and len(sys.argv) != 4:
     usage()
+
+if len(sys.argv) == 4:
+    log = csv.writer(open(sys.argv[3], 'wb'))
 
 fields = ["access_date", "access_time", "URL", "last_update", "institution",
           "pageviews", "address", "website", "email", "membership",
           "deliveries", "rating", "review_count", "classification",
-          "item_name", "price_whole", "price_part1", "price_part2",
-          "price_part3", "price_bundle", "price_other"]
+          "item_name"]
 
 template = {k : "" for k in fields}
 
-targets = open(sys.argv[1], 'r')
-destination = open(sys.argv[2], 'a')
+targets = open(sys.argv[1], 'rb')
+destination = open(sys.argv[2], 'ab')
 writer = csv.writer(destination)
 
 def html_decode(i):
@@ -91,7 +97,7 @@ def request_site(url):
 
     try:
         html = site.getresponse().read()
-    except httplib.BadStatusLine as e:
+    except:
         print('Error fetching ' + url)
 
     return html
@@ -100,38 +106,63 @@ def parse_site(url):
     """
     Converts URL to HTML and parses for relevant results.
     """
+
+    yielded_output = False
     html = request_site(url)
     
     output = template.copy()
     output["access_date"] = time.strftime("%m/%d/%Y")
     output["access_time"] = time.strftime("%H:%M:%S")
     output["URL"] = url
-    output["last_update"] = re.search('span class=\'timeago\' ' 
-                                      + 'title=".*?">(.*?)<', html).group(1)
+    
+    last_update = re.search('span class=\'timeago\' ' 
+                                      + 'title=".*?">(.*?)<', html)
+    if last_update != None:
+        output["last_update"] = last_update.group(1)
+
     output["institution"] = re.search('<h1 itemprop="name">(.*?)</h1>',
                                       html).group(1)
-    output["pageviews"] = re.search('<em>\(([0-9,]*) hits\)</em>',
-                                    html).group(1)
+    
+    pageviews = re.search('<em>\(([0-9,]*) hits\)</em>', html)
+    if pageviews != None:
+        output["pageviews"] = pageviews.group(1)
+
     address = re.search('<div class="span3">ADDRESS</div><div class="span9">'
                         + '(.*?)</div></div>', html)
     if address != None:
         output["address"] = re.sub('<.*?>', ' ', address.group(1))
-    output["website"] = re.search('<div class="span3">WEBSITE</div><div class='
+   
+    website = re.search('<div class="span3">WEBSITE</div><div class='
                                   + '"span9"><a href="(.*?)" target="_blank">'
-                                  + '.*?</a></div></div>', html).group(1)
-    output["email"] = re.search('<div class="span3">EMAIL</div><div class="'
+                                  + '.*?</a></div></div>', html)
+    if website != None:
+        output["website"] = website.group(1)
+   
+    email = re.search('<div class="span3">EMAIL</div><div class="'
                                 + 'span9"><a href=".*?">(.*?)</a></div></div>',
-                                html).group(1)
-    output["membership"] = re.search('<div class="span3">MEMBER SINCE</div>\s+'
+                                html)
+    if email != None:
+        output["email"] = email.group(1)
+    
+    membership = re.search('<div class="span3">MEMBER SINCE</div>\s+'
                                      + '<div class="span9">(.*?)</div>',
-                                     html).group(1)
-    if re.search('<b style="color:#000;">*Deliveries Only*</b>', html) != None:
+                                     html)
+    if membership != None:
+        output["membership"] = membership.group(1)
+
+    if re.search('Deliveries Only', html) != None:
         output["deliveries"] = "Deliveries Only"
-    output["rating"] = re.search('<span class="rating">\s+(.*?)\s+</span>',
-                                 html).group(1)
-    output["review_count"] = re.search('<span class="rating">\s+.*?\s+</span>'
+    
+    rating = re.search('<span class="rating">\s+(.*?)\s+</span>', html)
+    if rating != None:
+        output["rating"] = rating.group(1)
+
+    review_count = re.search('<span class="rating">\s+.*?\s+</span>'
                                     + '\s+<strong>\((.*?) reviews\)</strong>',
-                                    html).group(1)
+                                    html)
+    if review_count != None:
+        output["review_count"] = review_count.group(1)
+
     results = re.finditer('data-category-name="([^"]+)"\s+' + \
         'data\-json="([^"]+)"', html)
 
@@ -139,22 +170,22 @@ def parse_site(url):
         # Loads the JSON data stored in the document
         json_raw = result.group(2)
         json_data = json.loads(html_decode(json_raw))
-
+        item_fields = ["classification", "item_name"]
+        for item in item_fields:
+            output[item] = ''
         # Output the relevant results
         output["classification"] = result.group(1)
         output["item_name"] = json_data['name']
-        output["price_whole"] = json_data['price_gram']
-        output["price_part1"] = json_data['price_eighth']
-        output["price_part2"] = json_data['price_quarter']
-        output["price_part3"] = json_data['price_half_gram']
-        output["price_bundle"] = json_data['price_ounce']
-        output["price_other"] = json_data['price_unit']
         try:
             output_csv(output)
+            yielded_output = True
         except:
             print "Error on item: \n"
             for key in output:
                 print output[key]
+            print "\nskipping item..."
+    if not yielded_output:
+        output_csv(output)
 
 def output_csv(output_data):
     """
@@ -167,10 +198,19 @@ def output_csv(output_data):
         else:
             output.append(output_data[item])
     writer.writerow(output)
+    if len(sys.argv) == 4:
+        log.writerow(output)
 
 def __main__():
-    for site in targets:
-        parse_site(site.strip())
-
+    try:
+        for site in targets:
+            try:
+                site = site.strip()
+                time.sleep(random.random())
+                parse_site(site)
+            except:
+                print "Error in " + site
+    except:
+        print "Input error."
 if __name__ == "__main__":
     __main__()
